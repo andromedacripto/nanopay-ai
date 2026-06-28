@@ -9,10 +9,9 @@
  *   VUL-5: Replay protection via consumedTxHashes (singleton in replay-store).
  *           Hash is marked consumed BEFORE on-chain verification to prevent races.
  *   VUL-6: fromAddress and toAddress validated with viem isAddress() before use.
- *   BUG-1: USDC contract address now read from USDC_CONTRACT_ADDRESS env var,
- *           falling back to the Arc Testnet ERC-20 address (0x07865c...).
- *           The 0x3600... address is the native gas token, NOT the ERC-20 contract —
- *           receipt.to points to the ERC-20, so the old hardcode always failed.
+ *   BUG-1: USDC address is 0x3600... — this IS the ERC-20 interface on Arc.
+ *           On Arc, the native token and ERC-20 share the same address (0x3600...).
+ *           receipt.to for a transferFrom call points to 0x3600... correctly.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -26,13 +25,10 @@ const arcTestnet = defineChain({
   rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
 });
 
-// BUG-1 FIX: Use the ERC-20 USDC contract address from env, not the native gas token.
-// Arc Testnet ERC-20 USDC: 0x07865c6E87B9F70255377e024ace6630C1Eaa37F
-// The 0x3600... address is the native currency wrapper — receipt.to won't match it.
-const USDC_ADDRESS = (
-  process.env.USDC_ERC20_ADDRESS ||
-  "0x07865c6E87B9F70255377e024ace6630C1Eaa37F"
-).toLowerCase();
+// Arc Testnet: 0x3600... is BOTH the native token AND the ERC-20 interface.
+// They share the same address on Arc. receipt.to for transferFrom = 0x3600...
+// https://docs.arc.io/arc/concepts/stablecoin-native-model
+const USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
 
 // Transfer(address indexed from, address indexed to, uint256 value)
 const TRANSFER_EVENT_TOPIC =
