@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "NanoPay AI – Pague apenas pela inteligência que usar",
+  title: "NanoPay AI - Pay only for the intelligence you use",
   description:
-    "IA alimentada por micropagamentos em USDC na blockchain Arc. Sem assinaturas, sem conta. Pague por pergunta.",
+    "AI powered by USDC stablecoin micropayments on the Arc blockchain. No subscriptions, no account. Pay per question.",
   keywords: [
     "AI",
     "USDC",
@@ -15,17 +15,25 @@ export const metadata: Metadata = {
     "artificial intelligence",
   ],
   authors: [{ name: "NanoPay AI Team" }],
+  icons: {
+    icon: [
+      { url: "/favicon.ico" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
   openGraph: {
     title: "NanoPay AI",
-    description: "Pague apenas pela inteligência que usar.",
+    description: "Pay only for the intelligence you use.",
     type: "website",
-    locale: "pt_BR",
+    locale: "en_US",
     siteName: "NanoPay AI",
   },
   twitter: {
     card: "summary_large_image",
     title: "NanoPay AI",
-    description: "IA + USDC micropayments na Arc blockchain.",
+    description: "AI + USDC micropayments on Arc blockchain.",
   },
   robots: {
     index: true,
@@ -44,13 +52,9 @@ interface RootLayoutProps {
   children: React.ReactNode;
 }
 
-/**
- * Layout raiz da aplicação.
- * Define estrutura HTML base, fontes e metadados globais.
- */
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
-    <html lang="pt-BR" className="dark">
+    <html lang="en" className="dark">
       <body className="flex min-h-dvh flex-col antialiased">
         {children}
       </body>
