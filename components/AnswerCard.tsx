@@ -139,7 +139,7 @@ export default function AnswerCard({
             <div className="h-1.5 w-1.5 rounded-full bg-success" />
             <span className="text-xs text-text-muted">Tx:</span>
             <a
-              href={`https://explorer.testnet.arc.network/tx/${transactionHash}`}
+              href={`https://testnet.arcscan.app/tx/${transactionHash}`}
               target="_blank"
               rel="noopener noreferrer"
               className={cn(
