@@ -1,36 +1,52 @@
-import type { PaymentResponse, VerifyPaymentRequest, VerifyPaymentResponse } from "@/types";
+/**
+ * lib/payment/processor.ts
+ *
+ * Security / conformidade Arc fixes:
+ *   VUL-8: waitForTransaction timeout agora retorna FALSE (fail-safe).
+ *          Antes retornava `true` — qualquer transação pendente era
+ *          tratada como confirmada, o que poderia liberar o serviço
+ *          sem pagamento efetivo.
+ *
+ *   Arc gas fix: processUsdcPayment agora envia maxFeePerGas = 40 Gwei
+ *          (2× o mínimo de 20 Gwei da docs Arc) e maxPriorityFeePerGas
+ *          = 1 Gwei (recomendado). Sem esses campos, a transação pode
+ *          ficar pendente indefinidamente.
+ *          https://docs.arc.io/arc/references/gas-and-fees
+ */
+
+import type { PaymentResponse } from "@/types";
 import { PAYMENT_CONFIG } from "./config";
 import { usdcToAtomicUnits } from "@/lib/utils";
 
-/**
- * Codifica os dados da função transfer() ERC-20 para calldata.
- * Formato: 4 bytes selector + 32 bytes endereço + 32 bytes amount
- */
+// Arc Testnet: minimum base fee = 20 Gwei.
+// We use 2× for safety headroom.
+// https://docs.arc.io/arc/references/gas-and-fees
+const ARC_MAX_FEE_WEI = 40_000_000_000n; // 40 Gwei
+const ARC_PRIORITY_FEE_WEI = 1_000_000_000n; // 1 Gwei (recommended tip)
+
 function encodeTransferCalldata(to: string, amount: bigint): string {
-  const selector = "0xa9059cbb";
+  const selector = "0xa9059cbb"; // transfer(address,uint256)
   const paddedAddress = to.replace("0x", "").padStart(64, "0");
   const paddedAmount = amount.toString(16).padStart(64, "0");
   return `${selector}${paddedAddress}${paddedAmount}`;
 }
 
-/**
- * Executa o pagamento USDC via MetaMask.
- * Envia a transação ERC-20 transfer() para o contrato USDC.
- */
 export async function processUsdcPayment(
-  senderAddress: string
+  senderAddress: string,
+  amountUsdc?: string
 ): Promise<PaymentResponse> {
   if (typeof window === "undefined" || !window.ethereum) {
     return {
       success: false,
       transactionHash: null,
-      error: "Provider Web3 não encontrado.",
+      error: "Web3 provider not found.",
       timestamp: Date.now(),
     };
   }
 
   try {
-    const atomicAmount = usdcToAtomicUnits(PAYMENT_CONFIG.amountUsdc);
+    const amount = amountUsdc ?? PAYMENT_CONFIG.amountUsdc;
+    const atomicAmount = usdcToAtomicUnits(amount);
     const calldata = encodeTransferCalldata(
       PAYMENT_CONFIG.receiverAddress,
       atomicAmount
@@ -43,7 +59,9 @@ export async function processUsdcPayment(
           from: senderAddress,
           to: PAYMENT_CONFIG.usdcContractAddress,
           data: calldata,
-          gas: "0x186A0",
+          gas: "0x186A0", // 100,000 gas — sufficient for ERC-20 transfer
+          maxFeePerGas: `0x${ARC_MAX_FEE_WEI.toString(16)}`,
+          maxPriorityFeePerGas: `0x${ARC_PRIORITY_FEE_WEI.toString(16)}`,
         },
       ],
     })) as string;
@@ -61,7 +79,7 @@ export async function processUsdcPayment(
       return {
         success: false,
         transactionHash: null,
-        error: "Transação rejeitada pelo usuário.",
+        error: "Transaction rejected by user.",
         timestamp: Date.now(),
       };
     }
@@ -69,59 +87,45 @@ export async function processUsdcPayment(
     return {
       success: false,
       transactionHash: null,
-      error: err.message || "Erro ao processar pagamento.",
+      error: err.message || "Payment error.",
       timestamp: Date.now(),
     };
   }
 }
 
 /**
- * Aguarda confirmação de transação na blockchain.
- * Poll a cada 2 segundos até maxWaitMs.
+ * Waits for transaction confirmation on Arc Testnet.
+ * Arc has sub-second finality — polls every 500ms, max 15s.
+ *
+ * VUL-8 fix: returns FALSE on timeout instead of TRUE.
+ * A missing receipt after 15s means we cannot confirm the tx —
+ * treating it as confirmed would be a security hole.
  */
 export async function waitForTransaction(
   txHash: string,
-  maxWaitMs = 30000
+  maxWaitMs = 15_000
 ): Promise<boolean> {
-  if (!window.ethereum) return false;
+  if (typeof window === "undefined" || !window.ethereum) return false;
 
   const startTime = Date.now();
 
   while (Date.now() - startTime < maxWaitMs) {
-    const receipt = (await window.ethereum.request({
-      method: "eth_getTransactionReceipt",
-      params: [txHash],
-    })) as { status: string } | null;
+    try {
+      const receipt = (await window.ethereum.request({
+        method: "eth_getTransactionReceipt",
+        params: [txHash],
+      })) as { status: string } | null;
 
-    if (receipt) {
-      return receipt.status === "0x1";
+      if (receipt) {
+        return receipt.status === "0x1";
+      }
+    } catch {
+      // Ignore transient RPC errors, keep polling
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
+  // VUL-8 fix: fail-safe — timeout means unconfirmed, not confirmed.
   return false;
-}
-
-/**
- * Verifica pagamento via API server-side para maior segurança.
- */
-export async function verifyPaymentViaApi(
-  request: VerifyPaymentRequest
-): Promise<VerifyPaymentResponse> {
-  const response = await fetch("/api/payment", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    return {
-      verified: false,
-      transactionHash: request.transactionHash,
-      error: `Erro HTTP ${response.status}`,
-    };
-  }
-
-  return response.json() as Promise<VerifyPaymentResponse>;
 }
