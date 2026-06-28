@@ -1,41 +1,28 @@
 import type { ArcNetworkConfig } from "@/types";
 
-/**
- * Configuração oficial da Arc Testnet.
- * Chain ID: 5042002 | Gas token: USDC (6 decimals)
- */
-export const ARC_MAINNET: ArcNetworkConfig = {
-  chainId: 1252,
-  chainName: "Arc Mainnet",
-  rpcUrl: "https://rpc.arc.network",
-  explorerUrl: "https://explorer.arc.network",
-  nativeCurrency: {
-    name: "USDC",
-    symbol: "USDC",
-    decimals: 6,
-  },
-};
-
 export const ARC_TESTNET: ArcNetworkConfig = {
   chainId: 5042002,
   chainName: "Arc Testnet",
   rpcUrl: "https://rpc.testnet.arc.network",
-  explorerUrl: "https://explorer.testnet.arc.network",
+  explorerUrl: "https://testnet.arcscan.app",
   nativeCurrency: {
     name: "USDC",
     symbol: "USDC",
-    decimals: 6,
+    decimals: 18, // native USDC gas token uses 18 decimals on Arc
   },
 };
 
 export const ACTIVE_NETWORK: ArcNetworkConfig = ARC_TESTNET;
 
-export const SUPPORTED_CHAIN_IDS = [
-  ARC_MAINNET.chainId,
-  ARC_TESTNET.chainId,
-] as const;
+export const SUPPORTED_CHAIN_IDS = [ARC_TESTNET.chainId] as const;
 
 export const CONTRACT_ADDRESSES = {
-  USDC_TESTNET: "0x07865c6E87B9F70255377e024ace6630C1Eaa37f",
-  USDC_MAINNET: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  // Confirmed via https://docs.arc.io/arc/references/contract-addresses
+  // ERC-20 interface to native USDC, 6 decimals.
+  USDC_TESTNET: "0x3600000000000000000000000000000000000000",
 } as const;
+
+// Confirmed via https://docs.arc.io/arc/references/gas-and-fees
+// "The Arc Testnet enforces a minimum base fee of 160 Gwei... set maxFeePerGas >= 160 Gwei"
+export const ARC_MIN_FEE_GWEI = 160n;
+export const ARC_MIN_FEE_WEI = ARC_MIN_FEE_GWEI * 1_000_000_000n;

@@ -6,9 +6,11 @@ export const PAYMENT_CONFIG: PaymentConfig = {
   receiverAddress:
     process.env.PAYMENT_RECEIVER_ADDRESS ||
     "0x0000000000000000000000000000000000000001",
+  // Official Arc Testnet USDC contract address
+  // Source: https://docs.arc.io/arc/references/contract-addresses
   usdcContractAddress:
     process.env.NEXT_PUBLIC_USDC_CONTRACT ||
-    "0x07865c6E87B9F70255377e024ace6630C1Eaa37f",
+    "0x3600000000000000000000000000000000000000",
 };
 
 export const ERC20_ABI = [
