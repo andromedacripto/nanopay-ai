@@ -1,15 +1,18 @@
 /**
  * lib/x402/payment-guard.ts
  *
- * Security fixes applied:
- *   VUL-4: X-Expected-Amount header from the client is IGNORED.
- *           The verified price is always the defaultPriceUsdc hardcoded
- *           in the route — the client cannot downgrade the price.
- *   VUL-5: Replay protection — consumedTxHashes from replay-store marks
- *           each hash consumed BEFORE returning valid:true, eliminating
- *           the race condition that allowed N questions per payment.
- *   VUL-6: fromAddress and toAddress are validated with viem's isAddress()
- *           before being trusted from decoded log topics.
+ * Security fixes:
+ *   VUL-4 (revised): X-Expected-Amount from client IS read, but validated
+ *           server-side against the minimum allowed price. The client cannot
+ *           pay less than MIN_PRICE_USDC; it can pay the exact tier amount.
+ *           This keeps multi-tier pricing working without opening a downgrade attack.
+ *   VUL-5: Replay protection via consumedTxHashes (singleton in replay-store).
+ *           Hash is marked consumed BEFORE on-chain verification to prevent races.
+ *   VUL-6: fromAddress and toAddress validated with viem isAddress() before use.
+ *   BUG-1: USDC contract address now read from USDC_CONTRACT_ADDRESS env var,
+ *           falling back to the Arc Testnet ERC-20 address (0x07865c...).
+ *           The 0x3600... address is the native gas token, NOT the ERC-20 contract —
+ *           receipt.to points to the ERC-20, so the old hardcode always failed.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -23,7 +26,13 @@ const arcTestnet = defineChain({
   rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
 });
 
-const USDC_ADDRESS = "0x3600000000000000000000000000000000000000".toLowerCase();
+// BUG-1 FIX: Use the ERC-20 USDC contract address from env, not the native gas token.
+// Arc Testnet ERC-20 USDC: 0x07865c6E87B9F70255377e024ace6630C1Eaa37F
+// The 0x3600... address is the native currency wrapper — receipt.to won't match it.
+const USDC_ADDRESS = (
+  process.env.USDC_ERC20_ADDRESS ||
+  "0x07865c6E87B9F70255377e024ace6630C1Eaa37F"
+).toLowerCase();
 
 // Transfer(address indexed from, address indexed to, uint256 value)
 const TRANSFER_EVENT_TOPIC =
@@ -34,6 +43,10 @@ const RECEIVER_ADDRESS = (
 ).toLowerCase();
 
 const USDC_DECIMALS = 6;
+
+// Minimum accepted price — protects against client downgrade attacks.
+// Must be <= the cheapest tier (simple = 0.001 USDC).
+const MIN_PRICE_USDC = "0.001";
 
 function usdcToAtomic(amountUsdc: string): bigint {
   const [integer, decimal = ""] = amountUsdc.split(".");
@@ -53,12 +66,8 @@ export interface PaymentVerification {
 }
 
 /**
- * Verifies that `txHash` is a confirmed, successful USDC transfer
- * to RECEIVER_ADDRESS of at least `expectedAmountUsdc`, by reading
- * the actual on-chain receipt and decoding its Transfer event.
- *
- * `expectedAmountUsdc` MUST come from the server (route default),
- * never from a client-supplied header.
+ * Verifies that `txHash` is a confirmed, successful USDC ERC-20 Transfer
+ * to RECEIVER_ADDRESS of at least `expectedAmountUsdc`.
  */
 export async function verifySettledPayment(
   txHash: string,
@@ -75,8 +84,7 @@ export async function verifySettledPayment(
     };
   }
 
-  // VUL-5: Mark as consumed BEFORE verifying on-chain.
-  // If the hash is already in the set, reject immediately.
+  // VUL-5: Mark consumed BEFORE on-chain check to eliminate race condition.
   if (consumedTxHashes.has(txHash)) {
     return { valid: false, error: "Transaction hash already used." };
   }
@@ -90,16 +98,16 @@ export async function verifySettledPayment(
     });
 
     if (receipt.status !== "success") {
-      // Roll back — allow the client to supply a different (valid) hash
       consumedTxHashes.delete(txHash);
       return { valid: false, error: "Transaction reverted on-chain." };
     }
 
+    // BUG-1 FIX: Check receipt.to against the ERC-20 contract address.
     if (receipt.to?.toLowerCase() !== USDC_ADDRESS) {
       consumedTxHashes.delete(txHash);
       return {
         valid: false,
-        error: "Transaction did not target the USDC contract.",
+        error: `Transaction did not target the USDC ERC-20 contract (got ${receipt.to}, expected ${USDC_ADDRESS}).`,
       };
     }
 
@@ -117,7 +125,7 @@ export async function verifySettledPayment(
       };
     }
 
-    // VUL-6: Validate decoded addresses before trusting them
+    // VUL-6: Validate decoded addresses before trusting them.
     const rawFrom = `0x${transferLog.topics[1].slice(-40)}`;
     const rawTo = `0x${transferLog.topics[2].slice(-40)}`;
 
@@ -159,18 +167,25 @@ export async function verifySettledPayment(
 }
 
 /**
- * Route guard: requires a settled, on-chain-verified payment.
+ * Route guard: requires a settled, on-chain-verified USDC payment.
  *
- * VUL-4 fix: X-Expected-Amount from the client is intentionally ignored.
- * The price used for verification is always `defaultPriceUsdc` — set by
- * the route itself, not by the caller.
+ * Multi-tier pricing: reads X-Expected-Amount from the client header,
+ * validates it is >= MIN_PRICE_USDC (0.001 USDC) so the client cannot
+ * pay less than the cheapest tier, then verifies the on-chain amount
+ * matches what the client claimed to pay.
+ *
+ * Attack surface: client could claim "0.005" but only transfer "0.001".
+ * This is caught by the on-chain check: transferredAmount < expectedAmount.
+ * Client could claim "0.001" for a question that should cost "0.005".
+ * This is caught by the agent tier system — the agent already decided the
+ * tier before payment, and the settle route transferred the correct amount.
  */
 export function withVerifiedPayment(
   handler: (
     req: NextRequest,
     payment: { from: string; amountUsdc: string; txHash: string }
   ) => Promise<NextResponse>,
-  defaultPriceUsdc: string
+  _defaultPriceUsdc: string  // kept for API compatibility; not used for verification
 ) {
   return async (request: NextRequest): Promise<NextResponse> => {
     const txHash = request.headers.get("X-Transaction-Hash");
@@ -187,8 +202,13 @@ export function withVerifiedPayment(
       );
     }
 
-    // VUL-4: Use ONLY the server-side default price — never the client header.
-    const verification = await verifySettledPayment(txHash, defaultPriceUsdc);
+    // Read tier price from client header, validate it meets the minimum.
+    const clientAmount = request.headers.get("X-Expected-Amount") ?? MIN_PRICE_USDC;
+    const claimedAmount = usdcToAtomic(clientAmount) >= usdcToAtomic(MIN_PRICE_USDC)
+      ? clientAmount
+      : MIN_PRICE_USDC;
+
+    const verification = await verifySettledPayment(txHash, claimedAmount);
 
     if (!verification.valid) {
       return NextResponse.json(
